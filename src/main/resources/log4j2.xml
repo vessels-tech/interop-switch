@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+    <Properties>
+        <Property name="logDir">${sys:mule.home}/logs</Property>
+        <Property name="appName">interop-switch</Property>
+    </Properties>
+    <Appenders>
+        <RollingFile name="diagnostic" fileName="${logDir}/${appName}.log"
+                     filePattern="${logDir}/${appName}-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="[%d{ISO8601}] %-5p [%t] %c{1}: %m%n" />
+            <Policies>
+                <TimeBasedTriggeringPolicy />
+                <!-- <SizeBasedTriggeringPolicy size="200MB" /> -->
+            </Policies>
+            <DefaultRolloverStrategy max="10" />
+            <ThresholdFilter level="INFO"  onMatch="ACCEPT" onMismatch="DENY"/>
+        </RollingFile>
+        <Console name="CONSOLE" target="SYSTEM_OUT">
+            <PatternLayout pattern="%-5p %d [%t] %c{1}: %m%n" />
+        </Console>
+    </Appenders>
+    <Loggers>
+        <AsyncLogger name="javax.jmdns.impl.DNSIncoming" level="ERROR" />
+        <AsyncLogger name="javax.jmdns.impl.DNSIncoming" level="ERROR" /> name="httpclient.wire" level="INFO" />
+        <AsyncLogger name="javax.jmdns.impl.DNSIncoming" level="ERROR" /> name="org.apache.commons.httpclient" level="INFO" />
+        <AsyncLogger name="org.mule.util.queue.DualRandomAccessFileQueueStoreDelegate" level="INFO" />
+        <AsyncLogger name="org.mule.transformer" level="WARN" />
+        <AsyncLogger name="org.jetel.graph" level="WARN" />
+        <AsyncLogger name="org.mule.transport.service.DefaultTransportServiceDescriptor" level="WARN" />
+        <AsyncLogger name="com.sforce" level="INFO" />
+        <AsyncLogger name="org.mule.module.launcher.DeploymentDirectoryWatcher" level="WARN" />
+        <AsyncLogger name="org.mule.transformer.graph" level="WARN" />
+        <AsyncLogger name="com.mulesoft.module.batch" level="WARN" />
+        <AsyncLogger name="org.mule.transport.jms.JmsMessageUtils" level="ERROR" />
+        <AsyncLogger name="org.mule.lifecycle.AbstractLifecycleManager" level="WARN" />
+
+        <Root level="INFO">
+            <!-- log levels are set as filters on the appenders -->
+            <AppenderRef ref="diagnostic" />
+
+        </Root>
+    </Loggers>
+</Configuration>

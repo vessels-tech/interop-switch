@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd">
+
+    <spring:beans>
+        <spring:import resource="classpath:services-common.xml"/>
+        <spring:import resource="classpath:metrics.xml"/>
+    </spring:beans>
+    <spring:beans>
+        <spring:bean id="ExceptionTransformer" name="ExceptionTransformer" class="com.pdp.interop.L1PExceptionTransformer"/>
+    </spring:beans>
+
+    <apikit:config name="interop-switch-config" raml="interop-switch.raml" consoleEnabled="false" doc:name="Router"/>
+    <flow name="interop-switch-main">
+        <http:listener config-ref="api-httpListenerConfig" path="${switch-service.basepath}/*" doc:name="HTTP"/>
+        <logger level="INFO"
+                message="In SWITCH MAIN: #['\n']Received request at method=#[message.inboundProperties.'http.method'], url=http://#[message.inboundProperties.'host'+message.inboundProperties.'http.request.path'], Payload=#[message.payloadAs(java.lang.String)] Headers :: X-Source-Identifier: #[message.inboundProperties.'X-Source-Identifier'], X-Destination-Identifier: #[message.inboundProperties.'X-Destination-Identifier'], Accept: #[message.inboundProperties.'Accept'], Date: #[message.inboundProperties.'Date']"
+                category="com.pdp.interop.ilp.ledger.api-main" doc:name="logger"/>
+        <apikit:router config-ref="interop-switch-config" doc:name="APIkit Router"/>
+        <exception-strategy ref="interop-switch-apiKitGlobalExceptionMapping" doc:name="Reference Exception Strategy"/>
+    </flow>
+    <flow name="interop-switch-console">
+        <http:listener config-ref="api-httpListenerConfig" path="${switch-service.basepath}/console/*" doc:name="HTTP"/>
+        <apikit:console config-ref="interop-switch-config" doc:name="APIkit Console"/>
+    </flow>
+    <apikit:mapping-exception-strategy name="interop-switch-apiKitGlobalExceptionMapping">
+        <apikit:mapping statusCode="404">
+            <apikit:exception value="org.mule.module.apikit.exception.NotFoundException"/>
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Resource not found&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="405">
+            <apikit:exception value="org.mule.module.apikit.exception.MethodNotAllowedException"/>
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Method not allowed&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="415">
+            <apikit:exception value="org.mule.module.apikit.exception.UnsupportedMediaTypeException"/>
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Unsupported media type&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="406">
+            <apikit:exception value="org.mule.module.apikit.exception.NotAcceptableException"/>
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Not acceptable&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="400">
+            <apikit:exception value="org.mule.module.apikit.exception.BadRequestException"/>
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Bad request&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+    </apikit:mapping-exception-strategy>
+</mule>

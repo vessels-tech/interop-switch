@@ -1,0 +1,626 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:json="http://www.mulesoft.org/schema/mule/json"
+      xmlns:tls="http://www.mulesoft.org/schema/mule/tls"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/tls http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd">
+
+    <spring:beans>
+        <spring:bean id="fspIdUrlMappingRepository" class="com.pdp.interop.repo.FspIdToUrlMappingRepository">
+        </spring:bean>
+    </spring:beans>
+
+    <http:request-config name="account-lookup-service-http-config" host="${account-lookup-service.host}"
+                         port="${account-lookup-service.port}" basePath="${account-lookup-service.basepath}" doc:name="Account-Lookup HTTP Config">
+    </http:request-config>
+    <http:request-config name="central-ledger-http-config" host="${central-ledger.host}"
+                         port="${central-ledger.port}" doc:name="Central-Ledger HTTP Config">
+    </http:request-config>
+    
+    <http:request-config name="overide-this-config" doc:name="Dummy config that should be overidden"/>
+
+    <flow name="post:/fsp:application/json:interop-switch-config">
+        <json:json-to-object-transformer returnClass="java.util.Map" doc:name="JSON to Object"/>
+        <expression-component doc:name="Get FSP BaseUrl"><![CDATA[app.registry.fspIdUrlMappingRepository.addIdBaseUrlMapping(payload.fspId,payload.baseUrl)]]></expression-component>
+    </flow>
+
+    <flow name="put:/participants/{Type}/{ID}:application/json:interop-switch-config">
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutParticipantsByTypeID" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/participants/{Type}/{ID}:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutParticipantsByTypeID" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <json:json-to-object-transformer returnClass="java.util.HashMap" doc:name="JSON to Object"/>
+
+        <!-- Section to override the properties before calling fsp-->
+        <set-property propertyName="Accept" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="X-Destination-Identifier" value="#[payload.fspId]" doc:name="Overide X-Destination-Identifier"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Participant">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(payload.fspId)]]></expression-component>
+        <logger level="INFO"
+                message="FspId: #[payload.fspId] URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-participants-type-id" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to GET https://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID] Headers being set: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.put-participants-type-id" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]"
+                      path="#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]"
+                      method="GET" doc:name="GET on Receiver FSP /parties">
+            <http:success-status-code-validator values="202"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/participants/{Type}/{ID}/error:application/json:interop-switch-config">
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutParticipantsByTypeIDError" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/participants/{Type}/{ID}/error:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutParticipantsByTypeIDError" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Party">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Source-Identifier')]]></expression-component>
+        <logger level="INFO"
+                message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-participants-type-id-error" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/error Header: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.put-participants-type-id-error" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/error"
+                      method="PUT" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="200,400"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/participants/{Type}/{ID}/{SubId}:application/json:interop-switch-config">
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <set-property propertyName="SubId" value="#[message.inboundProperties.'http.uri.params'.SubId]" doc:name="Set Party SubId"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutParticipantsByTypeIDSubId" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/participants/{Type}/{ID}/{SubId}:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutParticipantsByTypeIDSubId" doc:name="VM"/>
+        <json:json-to-object-transformer returnClass="java.util.HashMap" doc:name="JSON to Object"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <!-- Section to override the properties before calling fsp-->
+        <set-property propertyName="Accept" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="X-Destination-Identifier" value="#[payload.fspId]" doc:name="Overide X-Destination-Identifier"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Participant">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(payload.fspId)]]></expression-component>
+        <logger level="INFO"
+                message="FspId: #[payload.fspId] URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-participants-type-id-subid" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to GET http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]//#[message.inboundProperties.SubId]"
+                category="com.pdp.interop.switch.put-participants-type-id-subid" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]" port="#[flowVars.dynamicUrl.getPort()]"
+                      path="#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId]"
+                      method="GET" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="202"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/participants/{Type}/{ID}/{SubId}/error:application/json:interop-switch-config">
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <set-property propertyName="SubId" value="#[message.inboundProperties.'http.uri.params'.SubId]" doc:name="Set Party Sub ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutParticipantsByTypeIDSubIdError" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/participants/{Type}/{ID}/{SubId}/error:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutParticipantsByTypeIDSubIdError" doc:name="VM"/>
+        <json:json-to-object-transformer returnClass="java.util.HashMap" doc:name="JSON to Object"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Party">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Source-Identifier')]]></expression-component>
+        <logger level="INFO"
+                message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-participants-type-id-subid-error" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId]/error"
+                category="com.pdp.interop.switch.put-participants-type-id-subid-error" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId]/error"
+                      method="PUT" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="200,400"/>
+        </http:request>
+    </flow>
+
+    <flow name="get:/parties/{Type}/{ID}:interop-switch-config">
+        <set-property propertyName="type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="GetPartyByTypeID" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="202" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-get:/parties/{Type}/{ID}:interop-switch-config">
+        <vm:inbound-endpoint address="vm://GetPartyByTypeID" doc:name="VM"/>
+        <set-variable variableName="type" value="#[message.inboundProperties.type]" doc:name="Variable"/>
+        <set-variable variableName="ID" value="#[message.inboundProperties.ID]" doc:name="Variable"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Accept" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <set-property propertyName="X-Requester" value="switch" doc:name="Set custom header"/>
+        <logger level="INFO"
+                message="Sending Request to GET http://${account-lookup-service.host}:${account-lookup-service.port}${account-lookup-service.basepath}/participants/#[flowVars.type]/#[flowVars.ID] X-CallbackUrl:#[message.outboundProperties.'X-CallbackUrl']"
+                category="com.pdp.interop.switch.get-parties-type-id" doc:name="logger"/>
+        <http:request config-ref="account-lookup-service-http-config"
+                      path="/participants/#[flowVars.type]/#[flowVars.ID]" method="GET" doc:name="Call account-lookup /participants">
+            <http:success-status-code-validator values="200..599"/>
+        </http:request>
+    </flow>
+
+    <flow name="get:/parties/{Type}/{ID}/{SubID}:interop-switch-config">
+        <set-property propertyName="type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <set-property propertyName="SubId" value="#[message.inboundProperties.'http.uri.params'.SubId]" doc:name="Set Party SubId"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="GetPartyByTypeIDSubId" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="202" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-get:/parties/{Type}/{ID}/{SubId}:interop-switch-config">
+        <vm:inbound-endpoint address="vm://GetPartyByTypeIDSubId" doc:name="VM"/>
+        <set-variable variableName="Type" value="#[message.inboundProperties.Type]" doc:name="Variable"/>
+        <set-variable variableName="ID" value="#[message.inboundProperties.ID]" doc:name="Variable"/>
+        <set-variable variableName="SubId" value="#[message.inboundProperties.SubId]" doc:name="Variable"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Accept" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <set-property propertyName="X-Requester" value="switch" doc:name="Set custom header"/>
+        <logger level="INFO"
+                message="Sending Request to GET http://${account-lookup-service.host}:${account-lookup-service.port}${account-lookup-service.basepath}/participants/#[flowVars.type]/#[flowVars.ID]/#[flowVars.SubId] "
+                category="com.pdp.interop.switch.get-parties-type-id-subid" doc:name="logger"/>
+        <http:request config-ref="account-lookup-service-http-config"
+                      path="/participants/#[flowVars.Type]/#[flowVars.ID]/#[flowVars.SubId]" method="GET" doc:name="Call account-lookup /participants">
+            <http:success-status-code-validator values="200..599"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/parties/{Type}/{ID}:application/json:interop-switch-config">
+        <logger level="INFO"
+                message="X-Source-Id: #[message.inboundProperties.'X-Source-Identifier'] X-Dest-Id: #[message.inboundProperties.'X-Destination-Identifier']"
+                category="com.pdp.interop.switch.put-parties-type-id" doc:name="logger" />
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutPartyById" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/parties/{Type}/{ID}:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutPartyById" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Party">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO"
+                message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-parties-type-id" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT https://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID] Payload: #[payload] Headers: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.put-parties-type-id" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]"
+                      method="PUT" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="200,400"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/parties/{Type}/{ID}/{SubId}:application/json:interop-switch-config">
+        <logger level="INFO"
+                message="X-Source-Id: #[message.inboundProperties.'X-Source-Identifier'] X-Dest-Id: #[message.inboundProperties.'X-Destination-Identifier']"
+                category="com.pdp.interop.switch.put-parties-type-id-subid" doc:name="logger" />
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <set-property propertyName="SubId" value="#[message.inboundProperties.'http.uri.params'.SubId]" doc:name="Set Party SubId"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutPartyByTypeIdSubId" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/parties/{Type}/{ID}/{SubId}:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutPartyByTypeIdSubId" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Party">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO"
+                message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-parties-type-id-subid" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId] Payload: #[payload] Headers: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.put-parties-type-id-subid" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId]"
+                      method="PUT" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="200,400"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/parties/{Type}/{ID}/error:application/json:interop-switch-config">
+        <logger level="INFO"
+                message="X-Source-Id: #[message.inboundProperties.'X-Source-Identifier'] X-Dest-Id: #[message.inboundProperties.'X-Destination-Identifier']"
+                category="com.pdp.interop.switch.put-parties-type-id-error" doc:name="logger" />
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutPartyByIdError" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/parties/{Type}/{ID}/error:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutPartyByIdError" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Party">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO"
+                message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-parties-type-id-error" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/error Payload: #[payload] Headers: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.put-parties-type-id-error" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/error"
+                      method="PUT" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="200,400"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/parties/{Type}/{ID}/{SubId}/error:application/json:interop-switch-config">
+        <logger level="INFO"
+                message="X-Source-Id: #[message.inboundProperties.'X-Source-Identifier'] X-Dest-Id: #[message.inboundProperties.'X-Destination-Identifier']"
+                category="com.pdp.interop.switch.put-parties-type-id-subid-error" doc:name="logger" />
+        <set-property propertyName="Type" value="#[message.inboundProperties.'http.uri.params'.Type]" doc:name="Set Party Type"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <set-property propertyName="SubId" value="#[message.inboundProperties.'http.uri.params'.SubId]" doc:name="Set Party SubId"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PutPartyByIDSubIdError" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/parties/{Type}/{ID}/{SubId}/error:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutPartyByIDSubIdError" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.parties+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Post Party">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO" message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-parties-type-id-subid-error" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId]/error"
+                category="com.pdp.interop.switch.put-parties-type-id-subid-error" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/parties/#[message.inboundProperties.Type]/#[message.inboundProperties.ID]/#[message.inboundProperties.SubId]/error"
+                      method="PUT" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="200,400"/>
+        </http:request>
+    </flow>
+
+    <flow name="post:/quotes:application/json:interop-switch-config">
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="PostQuotes" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="202" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-post:/quotes:application/json:interop-switch-config">
+        <vm:inbound-endpoint exchange-pattern="one-way" address="vm://PostQuotes" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <!--<set-property propertyName="Accept" value="application/vnd.interoperability.quotes+json;version=1.0" doc:name="Set-Accept"/>-->
+        <!--<set-property propertyName="Content-Type" value="application/vnd.interoperability.quotes+json;version=1.0" doc:name="Set Content-Type"/>-->
+        <set-property propertyName="Content-Type" value="application/json" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL"><![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger message="Destination URL:#[flowVars.fspUrl]" level="INFO" category="com.pdp.interop.switch.post-quotes" doc:name="Logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger message="Sending Request to POST http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/quotes Headers: #[message.outboundProperties]"
+       			level="INFO" category="com.pdp.interop.switch.post-quotes" doc:name="Logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]" port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicUrl.getPath()]/quotes"
+                      method="POST" doc:name="Call Payee FSP /quotes">
+            <http:success-status-code-validator values="202" />
+        </http:request>
+    </flow>
+
+    <flow name="put:/quotes/{ID}:application/json:interop-switch-config">
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Quote ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="PutQuotesByID" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/quotes/{ID}:application/json:interop-switch-config">
+        <vm:inbound-endpoint exchange-pattern="one-way" address="vm://PutQuotesByID" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.quotes+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL"><![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger message="FspId: #[payload.fspId] URL:#[flowVars.fspUrl]" level="INFO" category="com.pdp.interop.switch.put-quotes-id" doc:name="Logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/quotes/#[message.inboundProperties.ID] Payload: #[payload] Headers: #[message.outboundProperties]"
+        		level="INFO" category="com.pdp.interop.switch.put-quotes-id" doc:name="Logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]" port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicUrl.getPath()]/quotes/#[message.inboundProperties.ID]"
+                      method="PUT" doc:name="Call Payeer FSP /quotes">
+            <http:success-status-code-validator values="200" />
+        </http:request>
+    </flow>
+
+    <flow name="put:/quotes/{ID}/error:application/json:interop-switch-config">
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Quote ID"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="PutQuotesByIDError" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/quotes/{ID}/error:application/json:interop-switch-config">
+        <vm:inbound-endpoint exchange-pattern="one-way" address="vm://PutQuotesByIDError" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.quotes+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL"><![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger message="FspId: #[payload.fspId] URL:#[flowVars.fspUrl]" level="INFO" category="com.pdp.interop.switch.put-quotes-id-error" doc:name="Logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/quotes/#[message.inboundProperties.ID]/error Payload: #[payload] Headers: #[message.outboundProperties]"
+        		level="INFO" category="com.pdp.interop.switch.put-quotes-id-error" doc:name="Logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]" port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicUrl.getPath()]/quotes/#[message.inboundProperties.ID]/error"
+                      method="PUT" doc:name="Call Payeer FSP /quotes">
+            <http:success-status-code-validator values="200" />
+        </http:request>
+    </flow>
+
+    <flow name="get:/transactionRequests/{ID}:interop-switch-config">
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <vm:outbound-endpoint path="GetTransactionRequestsByID" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-get:/transactionRequests/{ID}:interop-switch-config">
+        <vm:inbound-endpoint address="vm://GetTransactionRequestsByID" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Accept" value="application/vnd.interoperability.transactionRequests+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.transactionRequests+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO" message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.get-transactionRequests-id" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to GET https://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/transactionRequests/#[message.inboundProperties.ID]"
+                category="com.pdp.interop.switch.get-transactionRequests-id" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/transactionRequests/#[message.inboundProperties.ID]"
+                      method="GET" doc:name="Call Receiver FSP /transactionRequests">
+            <http:success-status-code-validator values="202"/>
+        </http:request>
+    </flow>
+    
+    <flow name="post:/transactionRequests:application/json:interop-switch-config">
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <vm:outbound-endpoint path="PostTransactionRequests" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="202" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-post:/transactionRequests:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PostTransactionRequests" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Accept" value="application/vnd.interoperability.transactionRequests+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.transactionRequests+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO" message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.post-transactionRequests" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to POST https://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/transactionRequests Headers: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.post-transactionRequests" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/transactionRequests"
+                      method="POST" doc:name="Call Receiver FSP /parties">
+            <http:success-status-code-validator values="202"/>
+        </http:request>
+    </flow>
+    
+    <flow name="put:/transactionRequests/{ID}:application/json:interop-switch-config">
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <vm:outbound-endpoint path="PutTransactionRequestsByID" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/transactionRequests/{ID}:application/json:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutTransactionRequestsByID" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.transactionRequests+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO" message="FSP URL is:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-transactionRequests-id" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT https://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/transactionRequests/#[message.inboundProperties.ID] Headers: #[message.outboundProperties]"
+                category="com.pdp.interop.switch.put-transactionRequests-id" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/transactionRequests/#[message.inboundProperties.ID]"
+                      method="PUT" doc:name="Call Receiver FSP /transactionRequests">
+            <http:success-status-code-validator values="200"/>
+        </http:request>
+    </flow>
+
+    <flow name="put:/transactionRequests/{ID}/error:application/json:interop-switch-config">
+		<set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID" />
+		<flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+		<vm:outbound-endpoint path="PutTransactionRequestsByIDError" exchange-pattern="one-way" doc:name="VM" />
+		<set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload" />
+		<set-property propertyName="http.status" value="200" doc:name="Property" />
+	</flow>
+	<flow name="dequeue-put:/transactionRequests/{ID}/error:application/json:interop-switch-config">
+		<vm:inbound-endpoint address="vm://PutTransactionRequestsByIDError" doc:name="VM" />
+		<flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties" />
+		<set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+		<set-property propertyName="Content-Type" value="application/vnd.interoperability.transactionRequests+json;version=1.0" doc:name="Set Content-Type"/>
+		
+		<expression-component doc:name="Get Destination URL">
+	             <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+		<logger level="INFO" message="FSP URL is:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-transactionRequests-id-error" doc:name="logger" />
+		<set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable" />
+		<logger level="INFO"
+			message="Sending Request to PUT https://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/transactionRequests/#[message.inboundProperties.ID]/error"
+			category="com.pdp.interop.switch.put-transactionRequests-id-error" doc:name="logger" />
+		<http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]" port="#[flowVars.dynamicUrl.getPort()]"
+			path="#[flowVars.dynamicURL.getPath()]/transactionRequests/#[message.inboundProperties.ID]/error"
+			method="PUT" doc:name="Call Receiver FSP /transactionRequests">
+			<http:success-status-code-validator values="200,400" />
+		</http:request>
+	</flow>
+    
+    <flow name="get:/authorizations/{ID}:interop-switch-config">
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <vm:outbound-endpoint path="GetAuthorizationsByID" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="202" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-get:/authorizations/{ID}:interop-switch-config">
+        <vm:inbound-endpoint address="vm://GetAuthorizationsByID" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Accept" value="application/vnd.interoperability.authorizations+json;version=1.0" doc:name="Set-Accept"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.authorizations+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO" message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.get-authorizations-id" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to GET http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/transactionRequests/#[message.inboundProperties.ID]"
+                category="com.pdp.interop.switch.get-authorizations-id" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/authorizations/#[message.inboundProperties.ID]"
+                      method="GET" doc:name="Call Receiver FSP /authorizations">
+            <http:success-status-code-validator values="202"/>
+        </http:request>
+    </flow>
+    
+    <flow name="put:/authorizations/{ID}:application/json:interop-switch-config">
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID"/>
+        <vm:outbound-endpoint path="PutAuthorizationsByID" exchange-pattern="one-way" doc:name="VM"/>
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+        <set-property propertyName="http.status" value="200" doc:name="Property"/>
+    </flow>
+    <flow name="dequeue-put:/authorizations/{ID}:interop-switch-config">
+        <vm:inbound-endpoint address="vm://PutAuthorizationsByID" doc:name="VM"/>
+        <flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+        <set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+        <set-property propertyName="Content-Type" value="application/vnd.interoperability.authorizations+json;version=1.0" doc:name="Set Content-Type"/>
+        
+        <expression-component doc:name="Get Destination URL">
+            <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+        <logger level="INFO" message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-authorizations-id" doc:name="logger"/>
+        <set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable"/>
+        <logger level="INFO"
+                message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/authorizations/#[message.inboundProperties.ID]"
+                category="com.pdp.interop.switch.put-authorizations-id" doc:name="logger"/>
+        <http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]"
+                      port="#[flowVars.dynamicUrl.getPort()]" path="#[flowVars.dynamicURL.getPath()]/authorizations/#[message.inboundProperties.ID]"
+                      method="PUT" doc:name="Call Receiver FSP /authorizations">
+            <http:success-status-code-validator values="200"/>
+        </http:request>
+    </flow>
+    
+	<flow name="put:/authorizations/{ID}/error:application/json:interop-switch-config">
+		<flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties"/>
+		<set-property propertyName="ID" value="#[message.inboundProperties.'http.uri.params'.ID]" doc:name="Set Party ID" />
+		<vm:outbound-endpoint path="PutAuthorizationsByIDError" exchange-pattern="one-way" doc:name="VM" />
+		<set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload" />
+		<set-property propertyName="http.status" value="200" doc:name="Property" />
+	</flow>
+	<flow name="dequeue-put:/authorizations/{ID}/error:interop-switch-config">
+		<vm:inbound-endpoint address="vm://PutAuthorizationsByIDError" doc:name="VM" />
+		<flow-ref name="populate-outbound-properties" doc:name="populate-outbound-properties" />
+		<set-property propertyName="Content-Length" value="#[message.payloadAs(java.lang.String).toString().length()]" doc:name="Set-Content-Length"/>
+		<set-property propertyName="Content-Type" value="application/vnd.interoperability.authorizations+json;version=1.0" doc:name="Set Content-Type"/>
+
+		<expression-component doc:name="Get Destination URL">
+             <![CDATA[flowVars.fspUrl = app.registry.fspIdUrlMappingRepository.getBaseUrlById(message.inboundProperties.'X-Destination-Identifier')]]></expression-component>
+		<logger level="INFO" message="FSP URL:#[flowVars.fspUrl]" category="com.pdp.interop.switch.put-authorizations-id-error" doc:name="logger" />
+		<set-variable variableName="dynamicUrl" value="#[new URL(flowVars.fspUrl)]" doc:name="Variable" />
+		<logger level="INFO"
+			message="Sending Request to PUT http://#[flowVars.dynamicUrl.getHost()]:#[flowVars.dynamicUrl.getPort()]#[flowVars.dynamicUrl.getPath()]/authorizations/#[message.inboundProperties.ID]/error"
+			category="com.pdp.interop.switch.put-authorizations-id-error" doc:name="logger" />
+		<http:request config-ref="overide-this-config" host="#[flowVars.dynamicUrl.getHost()]" port="#[flowVars.dynamicUrl.getPort()]"
+			path="#[flowVars.dynamicURL.getPath()]/authorizations/#[message.inboundProperties.ID]/error"
+			method="PUT" doc:name="Call Receiver FSP /authorizations">
+			<http:success-status-code-validator values="200,400" />
+		</http:request>
+	</flow>
+
+    <sub-flow name="populate-outbound-properties">
+        <!-- Populate out-bound properties based on in-bound headers; Set Accept for GET, DELETE and POST; Set Content-Length for PUT, POST -->
+        <expression-component doc:name="Set-Date"><![CDATA[if( message.inboundProperties.Date != null )
+	message.outboundProperties['Date'] = message.inboundProperties.Date;]]></expression-component>
+        <expression-component doc:name="Set-X-Source-Identifier"><![CDATA[if( message.inboundProperties.'X-Source-Identifier' != null )
+	message.outboundProperties['X-Source-Identifier'] = message.inboundProperties.'X-Source-Identifier';]]></expression-component>
+        <expression-component doc:name="Set-X-Destination-Identifier"><![CDATA[if( message.inboundProperties.'X-Destination-Identifier' != null )
+	message.outboundProperties['X-Destination-Identifier'] = message.inboundProperties.'X-Destination-Identifier';]]></expression-component>
+		<expression-component doc:name="Set-X-Forwarded-For"><![CDATA[if( message.inboundProperties.'X-Forwarded-For' != null )
+	message.outboundProperties['X-Forwarded-For'] = message.inboundProperties.'X-Forwarded-For';]]></expression-component>
+        <expression-component doc:name="Set-X-API-Encryption"><![CDATA[if( message.inboundProperties.'X-API-Encryption' != null )
+	message.outboundProperties['X-API-Encryption'] = message.inboundProperties.'X-API-Encryption';]]></expression-component>
+        <expression-component doc:name="Set-X-API-Signature"><![CDATA[if( message.inboundProperties.'X-API-Signature' != null )
+	message.outboundProperties['X-API-Signature'] = message.inboundProperties.'X-API-Signature';]]></expression-component>
+        <expression-component doc:name="Set-X-API-URI"><![CDATA[if( message.inboundProperties.'X-API-URI' != null )
+	message.outboundProperties['X-API-URI'] = message.inboundProperties.'X-API-URI';]]></expression-component>
+        <expression-component doc:name="Set-X-HTTP-Method"><![CDATA[if( message.inboundProperties.'X-HTTP-Method' != null )
+	message.outboundProperties['X-HTTP-Method'] = message.inboundProperties.'X-HTTP-Method';]]></expression-component>
+    </sub-flow>
+
+</mule>

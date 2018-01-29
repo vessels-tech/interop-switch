@@ -1,0 +1,14 @@
+proxy-host=192.168.99.100
+
+#interop-account-lookup properties
+account-lookup-service.host=192.168.1.164
+account-lookup-service.port=8000
+
+#CST Services
+central-services-host=ec2-34-206-201-170.compute-1.amazonaws.com
+central-ledger.host=ec2-34-206-201-170.compute-1.amazonaws.com
+central-ledger.port=3002
+
+
+metrics.reporter.kafka.broker=ec2-35-164-199-6.us-west-2.compute.amazonaws.com:9092
+metrics.reporter.environment=pdp-local
