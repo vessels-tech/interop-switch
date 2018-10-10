@@ -1,4 +1,4 @@
-# interop-account-lookup
+# interop-switch
 
 This project provides the inplementation of /participants and its associated endpoints in PDP API.
 
@@ -49,10 +49,7 @@ Project is built using Maven and uses Circle for Continous Integration.
 
 Below are the RAML and OpenAPI spec for reference
 
-This is currently hosted as a service in the URL that looks like this:  http://\<awshost:port\>/spsp/client/v1/console/ , the OpenAPI docs and mule console details can be found [here](https://github.com/LevelOneProject/Docs/tree/master/AWS/Infrastructure/PI4-QA-Env) and [here](https://github.com/LevelOneProject/Docs/tree/master/AWS/Infrastructure/PI4-Test-Env)
-
-* RAML [here](./src/main/api/interop-account-lookup.raml)
-* OpenAPI [here](./src/main/api/interop-account-lookup.yaml)
+* RAML [here](./src/main/api/interop-switch.raml)
 
 ## Logging
 
@@ -62,11 +59,7 @@ Currently the logs are operational and include information such as TraceID and o
 
 ## Tests
 
-Java Unit Test exist for the project and include test for:
-
-* Invalid path should return 404
-* Query
-* Payment
+This project doesn't have the desired test coverege, since this is just a pass-through for most of the end-points and will be replaced with natively implemented features/end-points in the near future.
 
 #### Anypoint Studio
 * Run Unit Tests
