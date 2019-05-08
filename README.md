@@ -1,6 +1,6 @@
 # interop-switch
 
-This project provides the inplementation of /participants and its associated endpoints in PDP API.
+This project provides the implementation of `/participants` and its associated endpoints in PDP API.
 
 **Methods**: 
 
